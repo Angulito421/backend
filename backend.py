@@ -3,10 +3,18 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from openai import OpenAI
 import os
+import json
+
 
 app = Flask(__name__)
 # Permitir CORS desde tu servidor estático
-CORS(app, origins=["http://127.0.0.1:8000", "http://localhost:8000"], supports_credentials=True)
+# ###########################################################################################################################
+# CORS(app, origins=["http://127.0.0.1:8000", "http://localhost:8000"], supports_credentials=True)
+# ###########################################################################################################################
+CORS(app, resources={
+    r"/chat": {"origins": ["http://127.0.0.1:8000","http://localhost:8000"]},
+    r"/vision": {"origins": ["hhttp://127.0.0.1:8000","http://localhost:8000"]}
+})
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -40,6 +48,69 @@ def build_system_prompt(obra, autor=None, color=None, longitud="breves"):
         f"Longitud de respuesta: {longitud.lower()}."
     )
 
+
+@app.route("/vision", methods=["POST"])
+def vision():
+    # """
+    # Recibe: { image_base64: <b64_sin_prefijo>, clases: [...], autores: [...], colores: [...] }
+    # Devuelve: { description, best_index, best_name, reason, confidence }
+    # """
+    data = request.get_json(silent=True) or {}
+    image_b64 = data.get("image_base64")
+    clases = data.get("clases", [])
+    autores = data.get("autores", [])
+    colores = data.get("colores", [])
+
+    if not image_b64:
+        return jsonify({"error": "image_base64 requerido"}), 400
+
+    # Catálogo que el modelo debe elegir (exactamente una o -1 si no aplica)
+    catalog_lines = []
+    for i, name in enumerate(clases):
+        autor = autores[i] if i < len(autores) else ""
+        color = colores[i] if i < len(colores) else ""
+        catalog_lines.append(f"{i}: {name} | {autor} | {color}")
+
+    system_msg = (
+        "Eres una obra (pintura en un museo o un mural callejero)"
+        "Primero describe objetivamente lo que aparece en la imagen. "
+        "Luego elige exactamente UNA obra del catálogo que más se parezca. "
+        "Si no coincide con ninguna, usa best_index = -1. "
+        "Responde SOLO en JSON con las claves: "
+        "description (string), best_index (int), best_name (string), reason (string), confidence (0..1)."
+    )
+    user_text = (
+        "Catálogo (índice | nombre | autor | colores aprox):\n" +
+        "\n".join(catalog_lines) +
+        "\nAnaliza la imagen y elige la mejor coincidencia del catálogo. No inventes nombres fuera del catálogo."
+    )
+
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": [
+            {"type": "text", "text": user_text},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
+        ]}
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        txt = resp.choices[0].message.content
+        out = json.loads(txt)
+        # Asegura claves mínimas:
+        out.setdefault("best_index", -1)
+        out.setdefault("best_name", "")
+        out.setdefault("description", "")
+        out.setdefault("reason", "")
+        out.setdefault("confidence", 0.0)
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -87,5 +158,5 @@ def chat():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    # host/port explícitos
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port)
