@@ -18,6 +18,16 @@ CORS(app, resources={
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+
+@app.get("/")
+def root():
+    # Respuesta simple para monitores/health checks
+    return jsonify(status="ok", service="backend", endpoints=["/chat", "/vision", "/health"]), 200
+
+@app.get("/health")
+def health():
+    return "OK", 200
+
 def build_system_prompt(obra, autor=None, color=None, longitud="breves"):
     # Autor formateado (alias / sin nombre)
     autor_txt = ""
